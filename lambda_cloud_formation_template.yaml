@@ -12,6 +12,11 @@ Parameters:
     Description: 'Secrets name where the credentials are stored'
     Default: analyseexpendituresecrets01
     Type: String
+  TopicARN:
+    Description: 'Secrets name where the credentials are stored'
+    Default: arn:aws:sns:ap-south-1:652146530864:ANALYSE-EXPENDITURE-TOPIC
+    Type: String
+    
 Resources:
   ANALYSEEXPENDITUREFUNCTION:
     Type: 'AWS::Lambda::Function'
@@ -21,224 +26,231 @@ Resources:
       Handler: index.lambda_handler
       Code:
         ZipFile: |
-           # Importing libraries
-          from io import StringIO
-          import logging
-          import imaplib
-          from datetime import datetime, timedelta
-          import email
-          import pandas as pd
-          import re
-          import boto3
-          import json
-          import os
-          from bs4 import BeautifulSoup
-          from botocore.exceptions import ClientError
-          
-          
-          logger = logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')          
-          # Initialze global variables and client session.
-          logger.info("Initializing Variable and client session")
-          secret_name = "analyseexpendituresecrets01"
-          region_name = os.environ['REGION']
-          bucket_name = os.environ['STORAGEBUCKET']
-          secret_name = os.environ['SECRETSNAME']
-          boto_session = boto3.Session()
-          client_s3 = boto_session.client("s3")
-          client_secrets_manager = boto_session.client(
-              service_name="secretsmanager", region_name=region_name
-          )
-          
-          # Function to retreive email credentials from secret manager
-          def get_secret():
-          
-              try:
-                  get_secret_value_response = client_secrets_manager.get_secret_value(
-                      SecretId=secret_name
-                  )
-              except ClientError as e:
-                  raise e
-          
-              # Decrypts secret using the associated KMS key.
-              secret = get_secret_value_response
-              return json.loads(secret["SecretString"])
-          
-          
-          # Declare expenditure class
-          class expenditure:
-              # Dict containing regular expression to extract recipients and amount spent
-              regex_dict = [
-                  {
-                      "payment_type": "upi_payment",
-                      "amount_paid": "(?<=Rs\.)(\d+\.\d{2})",
-                      "recipient": "(?<=VPA\s)[\w.@-]+",
-                  },
-                  {
-                      "payment_type": "debt_card_payment",
-                      "amount_paid": "(?<=for Rs\s)[\d\.]+",
-                      "recipient": "(?<=at\s)(\w+\s?)+(?=\son)",
-                  },
-                  {
-                      "payment_type": "netbanking_payment",
-                      "amount_paid": "(?<=Rs\.)(\d+\.\d{2})",
-                      "recipient": "(?<=to\s)([\w\s]+)",
-                  },
-              ]
-          
-              def __init__(self, message, unique_id):
-                  self.email_raw = email.message_from_bytes((message[0][1]))
-                  self.date = self.extract_date()
-                  (
-                      self.payment_type,
-                      self.amount_paid,
-                      self.recipient,
-                      self.email_content,
-                      self.whole_email_content,
-                  ) = self.return_expenditure_details()
-                  self.unique_id = unique_id
-          
-              def extract_date(self):
-                  """
-                  Method to retreive email date
-                  """
-                  date = re.search(
-                      "\d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2}", str(self.email_raw)
-                  )
-                  return date.group()
-          
-              def return_email_content(self):
-                  """
-                  Method to retreive email email content after the html tags has been striped
-                  """
-                  for content in self.email_raw.get_payload():
-                      body = content.get_payload(decode=True).decode()
-                      soup = BeautifulSoup(body, features="html.parser")
-                      for script in soup(["script", "style"]):
-                          script.extract()
-                      text = soup.get_text()
-                      lines = (line.strip() for line in text.splitlines())
-                      chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                      email_content = [chunk for chunk in chunks if chunk]
-                  return email_content[2], "---->".join(email_content)
-          
-              def return_expenditure_details(self):
-                  """
-                  Method to return list of expenditure detail variables
-                  """
-                  email_content, whole_email_content = self.return_email_content()
-                  for type in expenditure.regex_dict:
-                      if re.search(type["recipient"], email_content) and re.search(
-                          type["amount_paid"], email_content
-                      ):
-                          return (
-                              type["payment_type"],
-                              re.search(type["amount_paid"], email_content).group(),
-                              re.search(type["recipient"], email_content).group(),
-                              email_content,
-                              whole_email_content,
-                          )
-                  return None, None, None, email_content, whole_email_content
-          
-              def return_list(self):
-                  """
-                  Method to return expenditure list
-                  """
-                  return [
-                      self.unique_id,
-                      self.payment_type,
-                      self.amount_paid,
-                      self.recipient,
-                      self.date,
-                      self.email_content,
-                      self.whole_email_content,
-                  ]
-          
-          
-          def main():
-              logger.info("Retreive user_id, password from secrets manager")
-              # Get the email contents sent by hdfc bank
-              secret_list = get_secret()
-              logger.info("Retrieve email contents")
-              user = secret_list["user"]
-              password = secret_list["password"]
-              imap_url = "imap.gmail.com"
-              my_mail = imaplib.IMAP4_SSL(imap_url)
-              my_mail.login(user, password)
-              my_mail.select("Inbox")
-              start_date = datetime.now() -  timedelta(days=1)
-              start_date_year = end_date.year
-              start_date_month = end_date.month
-              start_date_day = end_date.day
-              end_date = datetime.now() 
-              start_date_str = start_date.strftime("%d-%b-%Y")
-              end_date_str = end_date.strftime("%d-%b-%Y")
-              logger.info("Retrieving all the emails primary id.")
-              _, data = my_mail.search(
-                  None,
-                  f'(FROM "alerts@hdfcbank.net" SINCE "{start_date_str}" BEFORE "{end_date_str}")',
-              )
-          
-              mail_id_list = data[0].split()  
-              msgs = [] 
-              for num in mail_id_list:
-                  _, data = my_mail.fetch(num, "(RFC822)")
-                  msgs.append({"unique_id": num.decode("ascii"), "data": data})
-              logger.info("Email primary ID collected")
-          
-              expenditure_list = []
-              logger.info("Collecting Email contents")
-              for msg in msgs:
-                  transaction = expenditure(msg["data"], msg["unique_id"])
-                  expenditure_list.append(transaction.return_list())
-              logger.info("Transaction dict collected successfully")
-              expenditure_dataframe = pd.DataFrame(
-                  expenditure_list,
-                  columns=[
-                      "unique_id",
-                      "payment_type",
-                      "amount_paid",
-                      "recipient",
-                      "date",
-                      "email_content",
-                      "whole_email_content",
-                  ],
-              )
-              logger.info("Push the raw dataframe into s3 bucket")
-              # Raw file is used for analysing any anomalies in the dataset
-			  csv_buffer = StringIO()
-              expenditure_dataframe.to_csv(csv_buffer, index=False)
-              expenditure_file_name = (
-                  f"raw/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
-              )
-              client_s3.put_object(
-                  Body=csv_buffer.getvalue(),
-                  Bucket=bucket_name,
-                  Key=expenditure_file_name,
-              )
-              # Clean file is used for analysing the expenses
-              logger.info("Push the clean dataframe into s3 bucket")
-			  expenditure_dataframe = expenditure_dataframe[(~expenditure_dataframe['recipient'].isna())] 
-              expenditure_dataframe = expenditure_dataframe.reset_index(drop=True)
-              csv_buffer.truncate(0)
-              expenditure_dataframe.to_csv("expenditure_list_clean.csv")
-              expenditure_dataframe.to_csv(csv_buffer, index=False)
-              expenditure_file_name = (
-                  f"clean/{star_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
-              )
-              client_s3.put_object(
-                  Body=csv_buffer.getvalue(),
-                  Bucket=bucket_name,
-                  Key=expenditure_file_name,
-              )
-          def lambda_handler(event, context):
-              # initiate boto3 session
-              logger.info("Initiate Boto3 session with s3")
-              logger.info("Session initiated successfully")
-              try:
-                  main()
-              except Exception as e:
-                  logger.error(f'Function has failed with exception {e}')
-          
+         # Importing libraries
+         from io import StringIO
+         import logging
+         import imaplib
+         from datetime import datetime, timedelta
+         import email
+         import pandas as pd
+         import re
+         import boto3
+         import json
+         import os
+         from bs4 import BeautifulSoup
+         from botocore.exceptions import ClientError
+         
+         
+         logger = logging.getLogger()
+         logger.setLevel(logging.INFO)        
+         # Initialze global variables and client session.
+         logger.info("Initializing Variable and client session")
+         secret_name = "analyseexpendituresecrets01"
+         region_name = os.environ['REGION']
+         bucket_name = os.environ['STORAGEBUCKET']
+         secret_name = os.environ['SECRETSNAME']
+         boto_session = boto3.Session()
+         client_s3 = boto_session.client("s3")
+         client_secrets_manager = boto_session.client(
+             service_name="secretsmanager", region_name=region_name
+         )
+         
+         # Function to retreive email credentials from secret manager
+         def get_secret():
+         
+             try:
+                 get_secret_value_response = client_secrets_manager.get_secret_value(
+                     SecretId=secret_name
+                 )
+             except ClientError as e:
+                 raise e
+         
+             # Decrypts secret using the associated KMS key.
+             secret = get_secret_value_response
+             return json.loads(secret["SecretString"])
+         
+         
+         # Declare expenditure class
+         class expenditure:
+             # Dict containing regular expression to extract recipients and amount spent
+             regex_dict = [
+                 {
+                     "payment_type": "upi_payment",
+                     "amount_paid": "(?<=Rs\.)(\d+\.\d{2})",
+                     "recipient": "(?<=VPA\s)[\w.@-]+",
+                 },
+                 {
+                     "payment_type": "debt_card_payment",
+                     "amount_paid": "(?<=for Rs\s)[\d\.]+",
+                     "recipient": "(?<=at\s)(\w+\s?)+(?=\son)",
+                 },
+                 {
+                     "payment_type": "netbanking_payment",
+                     "amount_paid": "(?<=Rs\.)(\d+\.\d{2})",
+                     "recipient": "(?<=to\s)([\w\s]+)",
+                 },
+             ]
+         
+             def __init__(self, message, unique_id):
+                 self.email_raw = email.message_from_bytes((message[0][1]))
+                 self.date = self.extract_date()
+                 (
+                     self.payment_type,
+                     self.amount_paid,
+                     self.recipient,
+                     self.email_content,
+                     self.whole_email_content,
+                 ) = self.return_expenditure_details()
+                 self.unique_id = unique_id
+         
+             def extract_date(self):
+                 """
+                 Method to retreive email date
+                 """
+                 date = re.search(
+                     "\d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2}", str(self.email_raw)
+                 )
+                 return date.group()
+         
+             def return_email_content(self):
+                 """
+                 Method to retreive email email content after the html tags has been striped
+                 """
+                 for content in self.email_raw.get_payload():
+                     body = content.get_payload(decode=True).decode()
+                     soup = BeautifulSoup(body, features="html.parser")
+                     for script in soup(["script", "style"]):
+                         script.extract()
+                     text = soup.get_text()
+                     lines = (line.strip() for line in text.splitlines())
+                     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                     email_content = [chunk for chunk in chunks if chunk]
+                 return email_content[2], "---->".join(email_content)
+         
+             def return_expenditure_details(self):
+                 """
+                 Method to return list of expenditure detail variables
+                 """
+                 email_content, whole_email_content = self.return_email_content()
+                 for type in expenditure.regex_dict:
+                     if re.search(type["recipient"], email_content) and re.search(
+                         type["amount_paid"], email_content
+                     ):
+                         return (
+                             type["payment_type"],
+                             re.search(type["amount_paid"], email_content).group(),
+                             re.search(type["recipient"], email_content).group(),
+                             email_content,
+                             whole_email_content,
+                         )
+                 return None, None, None, email_content, whole_email_content
+         
+             def return_list(self):
+                 """
+                 Method to return expenditure list
+                 """
+                 return [
+                     self.unique_id,
+                     self.payment_type,
+                     self.amount_paid,
+                     self.recipient,
+                     self.date,
+                     self.email_content,
+                     self.whole_email_content,
+                 ]
+         
+         
+         def main():
+             logger.info("Retreive user_id, password from secrets manager")
+             # Get the email contents sent by hdfc bank
+             secret_list = get_secret()
+             logger.info("Retrieve email contents")
+             user = secret_list["user"]
+             password = secret_list["password"]
+             imap_url = "imap.gmail.com"
+             my_mail = imaplib.IMAP4_SSL(imap_url)
+             my_mail.login(user, password)
+             my_mail.select("Inbox")
+             start_date = datetime.now() -  timedelta(days=1)
+             start_date_year = start_date.year
+             start_date_month = start_date.month
+             start_date_day = start_date.day
+             end_date = datetime.now() 
+             start_date_str = start_date.strftime("%d-%b-%Y")
+             end_date_str = end_date.strftime("%d-%b-%Y")
+             logger.info("Retrieving all the emails primary id.")
+             _, data = my_mail.search(
+                 None,
+                 f'(FROM "alerts@hdfcbank.net" SINCE "{start_date_str}" BEFORE "{end_date_str}")',
+             )
+         
+             mail_id_list = data[0].split()  
+             msgs = [] 
+             for num in mail_id_list:
+                 _, data = my_mail.fetch(num, "(RFC822)")
+                 msgs.append({"unique_id": num.decode("ascii"), "data": data})
+             logger.info("Email primary ID collected")
+         
+             expenditure_list = []
+             logger.info("Collecting Email contents")
+             for msg in msgs:
+                 transaction = expenditure(msg["data"], msg["unique_id"])
+                 expenditure_list.append(transaction.return_list())
+             logger.info("Transaction dict collected successfully")
+             expenditure_dataframe = pd.DataFrame(
+                 expenditure_list,
+                 columns=[
+                     "unique_id",
+                     "payment_type",
+                     "amount_paid",
+                     "recipient",
+                     "date",
+                     "email_content",
+                     "whole_email_content",
+                 ],
+             )
+             logger.info("Push the raw dataframe into s3 bucket")
+             # Raw file is used for analysing any anomalies in the dataset
+             csv_buffer = StringIO()
+             expenditure_dataframe.to_csv(csv_buffer, index=False)
+             expenditure_file_name = (
+                 f"raw/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
+             )
+             client_s3.put_object(
+                 Body=csv_buffer.getvalue(),
+                 Bucket=bucket_name,
+                 Key=expenditure_file_name,
+             )
+             # Clean file is used for analysing the expenses
+             logger.info("Push the clean dataframe into s3 bucket")
+             expenditure_dataframe = expenditure_dataframe[(~expenditure_dataframe['recipient'].isna())] 
+             expenditure_dataframe = expenditure_dataframe.reset_index(drop=True)
+             expenditure_dataframe.drop(columns=['email_content','whole_email_content'])
+             csv_buffer.truncate(0)
+             expenditure_dataframe.to_csv(csv_buffer, index=False)
+             expenditure_file_name = (
+                 f"clean/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
+             )
+             client_s3.put_object(
+                 Body=csv_buffer.getvalue(),
+                 Bucket=bucket_name,
+                 Key=expenditure_file_name,
+             )
+         def lambda_handler(event, context):
+             # initiate boto3 session
+             logger.info("Initiate Boto3 session with s3")
+             logger.info("Session initiated successfully")
+             try:
+                 main()
+             except Exception as e:
+                 logger.info('sending alert to subscribers')
+                 sns = boto3.client('sns')
+                 sns.publish(
+                    TopicArn=os.environ['SNSTOPICARN'],
+                    Message=f'Lambda function encountered an error: {str(e)}'
+                         )
+                 logger.error(f'Function has failed with exception {e}')
+                  
           
       Timeout: 30
       MemorySize: 128
@@ -251,6 +263,7 @@ Resources:
           REGION: !Ref Region
           STORAGEBUCKET: !Ref StorageBucket
           SECRETSNAME: !Ref secretsname
+          SNSTOPICARN: !Ref TopicARN
 
   ANALYSEEXPENDITUREFUNCTIONROLE:
     Type: AWS::IAM::Role
@@ -273,7 +286,9 @@ Resources:
                   - s3:ListBucket
                   - s3:GetObject
                   - s3:PutObject
-                Resource: arn:aws:s3:::analyseexpenditurebucket/*
+                Resource:
+                  - Fn::Sub: arn:aws:s3:::${StorageBucket}
+                  - Fn::Sub: arn:aws:s3:::${StorageBucket}/*
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
@@ -284,22 +299,23 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: '*'
-
-
+              - Effect: "Allow"
+                Action: "sns:Publish"
+                Resource: !Ref TopicARN
   ANALYSEEXPENDITUREFUNCTIONTRIGGERRULE:
     Type: 'AWS::Events::Rule'
     Properties:
       Description: Schedule for triggering analyse_expenditure
-      ScheduleExpression: 'cron(30 5 * * ? *)'
+      ScheduleExpression: 'cron(30 18 * * ? *)'
       State: ENABLED
       Targets:
-        - Arn: !GetAtt ANALYSEEXPENDITUREFUNTION.Arn
+        - Arn: !GetAtt ANALYSEEXPENDITUREFUNCTION.Arn
           Id: ANALYSEEXPENDITUREFUNTCIONTARGET
 
-  MyEventPermission:
+  ANALYSEEXPENDITUREFUNCTIONTRIGGERRULEPermission:
     Type: 'AWS::Lambda::Permission'
     Properties:
-      FunctionName: !Ref MyLambdaFunction
+      FunctionName: !Ref ANALYSEEXPENDITUREFUNCTION
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt ANALYSEEXPENDITUREFUNCTIONTRIGGERRULE.Arn
