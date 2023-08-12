@@ -1,6 +1,19 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  StorageBucket:
+    Description: 'Bucket where daily expenditure details are uploaded'
+    Default: analyse-expenditure
+    Type: String
+  Region:
+    Description: 'Region where resources will be deployed'
+    Default: ap-south-1
+    Type: String
+  secretsname:
+    Description: 'Secrets name where the credentials are stored'
+    Default: analyseexpendituresecrets01
+    Type: String
 Resources:
-  MyLambdaFunction:
+  ANALYSEEXPENDITUREFUNCTION:
     Type: 'AWS::Lambda::Function'
     Properties:
       FunctionName: analyse_expenditure
@@ -18,50 +31,37 @@ Resources:
           import re
           import boto3
           import json
+          import os
           from bs4 import BeautifulSoup
           from botocore.exceptions import ClientError
           
           
-          # Initialze global variables
-          region_name = "ap-south-1"
+          logger = logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')          
+          # Initialze global variables and client session.
+          logger.info("Initializing Variable and client session")
+          secret_name = "analyseexpendituresecrets01"
+          region_name = os.environ['REGION']
+          bucket_name = os.environ['STORAGEBUCKET']
+          secret_name = os.environ['SECRETSNAME']
           boto_session = boto3.Session()
-          client_s3 = boto_session.client("s3", verify=False)
+          client_s3 = boto_session.client("s3")
           client_secrets_manager = boto_session.client(
               service_name="secretsmanager", region_name=region_name
           )
           
           # Function to retreive email credentials from secret manager
           def get_secret():
-              secret_name = "analyseexpendituresecrets01"
           
               try:
                   get_secret_value_response = client_secrets_manager.get_secret_value(
                       SecretId=secret_name
                   )
               except ClientError as e:
-                  # For a list of exceptions thrown, see
-                  # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
                   raise e
           
               # Decrypts secret using the associated KMS key.
               secret = get_secret_value_response
               return json.loads(secret["SecretString"])
-          
-          
-          # Class for creating logger object. The logs will be stored into cloud watch directly.
-          class logger:
-              def __init__(self):
-                  self.root_logger = logging.getLogger(__name__)
-                  self.root_logger.setLevel(logging.INFO)
-                  self.s_handler = logging.StreamHandler()
-                  self.s_formatter = logging.Formatter(
-                      "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-                  )
-                  self.s_handler.setFormatter(self.s_formatter)
-                  self.root_logger.addHandler(self.s_handler)
-          
-              def get_logger_object(self):
-                  return self.root_logger
           
           
           # Declare expenditure class
@@ -154,52 +154,43 @@ Resources:
                   ]
           
           
-          def main(stream_logger):
-              stream_logger.info("Retreive user_id, password from secrets manager")
+          def main():
+              logger.info("Retreive user_id, password from secrets manager")
+              # Get the email contents sent by hdfc bank
               secret_list = get_secret()
-              # Load the user name and passwd from yaml file
+              logger.info("Retrieve email contents")
               user = secret_list["user"]
               password = secret_list["password"]
-          
-              # URL for IMAP connection
               imap_url = "imap.gmail.com"
-          
-              # Connection with GMAIL using SSL
               my_mail = imaplib.IMAP4_SSL(imap_url)
-          
-              # Log in using your credentials
               my_mail.login(user, password)
-          
-              # Select the Inbox to fetch messages
               my_mail.select("Inbox")
-          
-              # Define Key and Value for email search
-              # For other keys (criteria): https://gist.github.com/martinrusev/6121028#file-imap-search
-              start_date = datetime.now()
-              end_date = datetime.now() + timedelta(days=1)
+              start_date = datetime.now() -  timedelta(days=1)
+              start_date_year = end_date.year
+              start_date_month = end_date.month
+              start_date_day = end_date.day
+              end_date = datetime.now() 
               start_date_str = start_date.strftime("%d-%b-%Y")
               end_date_str = end_date.strftime("%d-%b-%Y")
-              stream_logger.info("Retrieving all the emails primary id.")
+              logger.info("Retrieving all the emails primary id.")
               _, data = my_mail.search(
                   None,
                   f'(FROM "alerts@hdfcbank.net" SINCE "{start_date_str}" BEFORE "{end_date_str}")',
               )
           
-              mail_id_list = data[0].split()  # IDs of all emails that we want to fetch
-              msgs = []  # empty list to capture all messages
-              # Iterate through messages and extract data into the msgs list
+              mail_id_list = data[0].split()  
+              msgs = [] 
               for num in mail_id_list:
-                  # RFC822 returns whole message (BODY fetches just body)
                   _, data = my_mail.fetch(num, "(RFC822)")
                   msgs.append({"unique_id": num.decode("ascii"), "data": data})
-              stream_logger.info("Email primary ID collected")
+              logger.info("Email primary ID collected")
           
               expenditure_list = []
-              stream_logger.info("Collecting Email contents")
+              logger.info("Collecting Email contents")
               for msg in msgs:
                   transaction = expenditure(msg["data"], msg["unique_id"])
                   expenditure_list.append(transaction.return_list())
-              stream_logger.info("Transaction dict collected successfully")
+              logger.info("Transaction dict collected successfully")
               expenditure_dataframe = pd.DataFrame(
                   expenditure_list,
                   columns=[
@@ -212,44 +203,41 @@ Resources:
                       "whole_email_content",
                   ],
               )
-              stream_logger.info("Initiate pushing the raw dataframe into s3 bucket")
+              logger.info("Push the raw dataframe into s3 bucket")
               # Raw file is used for analysing any anomalies in the dataset
 			  csv_buffer = StringIO()
               expenditure_dataframe.to_csv(csv_buffer, index=False)
               expenditure_file_name = (
-                  "raw/" + f"expenditure_{start_date_str}_to_{end_date_str}.csv"
+                  f"raw/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
               )
               client_s3.put_object(
                   Body=csv_buffer.getvalue(),
-                  Bucket="analyseexpenditurebucket",
+                  Bucket=bucket_name,
                   Key=expenditure_file_name,
               )
-              stream_logger.info("Initiate pushing the clean dataframe into s3 bucket")
               # Clean file is used for analysing the expenses
-              stream_logger.info("Initiate pushing the clean dataframe into s3 bucket")
+              logger.info("Push the clean dataframe into s3 bucket")
 			  expenditure_dataframe = expenditure_dataframe[(~expenditure_dataframe['recipient'].isna())] 
               expenditure_dataframe = expenditure_dataframe.reset_index(drop=True)
               csv_buffer.truncate(0)
               expenditure_dataframe.to_csv("expenditure_list_clean.csv")
               expenditure_dataframe.to_csv(csv_buffer, index=False)
               expenditure_file_name = (
-                  "clean/" + f"expenditure_{start_date_str}_to_{end_date_str}.csv"
+                  f"clean/{star_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
               )
               client_s3.put_object(
                   Body=csv_buffer.getvalue(),
-                  Bucket="analyseexpenditurebucket",
+                  Bucket=bucket_name,
                   Key=expenditure_file_name,
               )
           def lambda_handler(event, context):
-              stream_logger = logger().get_logger_object()
               # initiate boto3 session
-              stream_logger.info("Initiate Boto3 session with s3")
-              stream_logger.info("Session initiated successfully")
+              logger.info("Initiate Boto3 session with s3")
+              logger.info("Session initiated successfully")
               try:
-                  main(stream_logger)
+                  main()
               except Exception as e:
-                  stream_logger.exception(f"Exception is {e}")
-              stream_logger.info("Code executed successfully")
+                  logger.error(f'Function has failed with exception {e}')
           
           
       Timeout: 30
@@ -257,33 +245,56 @@ Resources:
       Layers:
         - arn:aws:lambda:ap-south-1:336392948345:layer:AWSSDKPandas-Python38:8
         - arn:aws:lambda:ap-south-1:652146530864:layer:bs4:1
-      Role: !GetAtt MyLambdaRole.Arn
+      Role: !GetAtt ANALYSEEXPENDITUREFUNCTIONROLE.Arn
+      Environment:
+        Variables:
+          REGION: !Ref Region
+          STORAGEBUCKET: !Ref StorageBucket
+          SECRETSNAME: !Ref secretsname
 
-  MyLambdaRole:
-    Type: 'AWS::IAM::Role'
+  ANALYSEEXPENDITUREFUNCTIONROLE:
+    Type: AWS::IAM::Role
     Properties:
-      RoleName: analyse_expenditure_role
+      RoleName: LambdaExecutionRole
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: 2012-10-17
         Statement:
           - Effect: Allow
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::652146530864:policy/service-role/AWSLambdaBasicExecutionRole-e16e13c2-cdca-43e2-8b9a-89b5466bea14
-        - arn:aws:iam::652146530864:policy/put_object_policy
-        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      Policies:
+        - PolicyName: LambdaS3SecretsManagerPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: arn:aws:s3:::analyseexpenditurebucket/*
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
 
-  MyEventRule:
+
+  ANALYSEEXPENDITUREFUNCTIONTRIGGERRULE:
     Type: 'AWS::Events::Rule'
     Properties:
       Description: Schedule for triggering analyse_expenditure
-      ScheduleExpression: 'cron(30 16 * * ? *)'
+      ScheduleExpression: 'cron(30 5 * * ? *)'
       State: ENABLED
       Targets:
-        - Arn: !GetAtt MyLambdaFunction.Arn
-          Id: MyLambdaFunctionTarget
+        - Arn: !GetAtt ANALYSEEXPENDITUREFUNTION.Arn
+          Id: ANALYSEEXPENDITUREFUNTCIONTARGET
 
   MyEventPermission:
     Type: 'AWS::Lambda::Permission'
@@ -291,4 +302,4 @@ Resources:
       FunctionName: !Ref MyLambdaFunction
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
-      SourceArn: !GetAtt MyEventRule.Arn
+      SourceArn: !GetAtt ANALYSEEXPENDITUREFUNCTIONTRIGGERRULE.Arn
