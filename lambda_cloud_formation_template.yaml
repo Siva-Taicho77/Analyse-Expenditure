@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  MyLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: analyse_expenditure
+      Runtime: python3.8
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+           # Importing libraries
+          from io import StringIO
+          import logging
+          import imaplib
+          from datetime import datetime, timedelta
+          import email
+          import pandas as pd
+          import re
+          import boto3
+          import json
+          from bs4 import BeautifulSoup
+          from botocore.exceptions import ClientError
+          
+          
+          # Initialze global variables
+          region_name = "ap-south-1"
+          boto_session = boto3.Session()
+          client_s3 = boto_session.client("s3", verify=False)
+          client_secrets_manager = boto_session.client(
+              service_name="secretsmanager", region_name=region_name
+          )
+          
+          # Function to retreive email credentials from secret manager
+          def get_secret():
+              secret_name = "analyseexpendituresecrets01"
+          
+              try:
+                  get_secret_value_response = client_secrets_manager.get_secret_value(
+                      SecretId=secret_name
+                  )
+              except ClientError as e:
+                  # For a list of exceptions thrown, see
+                  # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+                  raise e
+          
+              # Decrypts secret using the associated KMS key.
+              secret = get_secret_value_response
+              return json.loads(secret["SecretString"])
+          
+          
+          # Class for creating logger object. The logs will be stored into cloud watch directly.
+          class logger:
+              def __init__(self):
+                  self.root_logger = logging.getLogger(__name__)
+                  self.root_logger.setLevel(logging.INFO)
+                  self.s_handler = logging.StreamHandler()
+                  self.s_formatter = logging.Formatter(
+                      "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                  )
+                  self.s_handler.setFormatter(self.s_formatter)
+                  self.root_logger.addHandler(self.s_handler)
+          
+              def get_logger_object(self):
+                  return self.root_logger
+          
+          
+          # Declare expenditure class
+          class expenditure:
+              # Dict containing regular expression to extract recipients and amount spent
+              regex_dict = [
+                  {
+                      "payment_type": "upi_payment",
+                      "amount_paid": "(?<=Rs\.)(\d+\.\d{2})",
+                      "recipient": "(?<=VPA\s)[\w.@-]+",
+                  },
+                  {
+                      "payment_type": "debt_card_payment",
+                      "amount_paid": "(?<=for Rs\s)[\d\.]+",
+                      "recipient": "(?<=at\s)(\w+\s?)+(?=\son)",
+                  },
+                  {
+                      "payment_type": "netbanking_payment",
+                      "amount_paid": "(?<=Rs\.)(\d+\.\d{2})",
+                      "recipient": "(?<=to\s)([\w\s]+)",
+                  },
+              ]
+          
+              def __init__(self, message, unique_id):
+                  self.email_raw = email.message_from_bytes((message[0][1]))
+                  self.date = self.extract_date()
+                  (
+                      self.payment_type,
+                      self.amount_paid,
+                      self.recipient,
+                      self.email_content,
+                      self.whole_email_content,
+                  ) = self.return_expenditure_details()
+                  self.unique_id = unique_id
+          
+              def extract_date(self):
+                  """
+                  Method to retreive email date
+                  """
+                  date = re.search(
+                      "\d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2}", str(self.email_raw)
+                  )
+                  return date.group()
+          
+              def return_email_content(self):
+                  """
+                  Method to retreive email email content after the html tags has been striped
+                  """
+                  for content in self.email_raw.get_payload():
+                      body = content.get_payload(decode=True).decode()
+                      soup = BeautifulSoup(body, features="html.parser")
+                      for script in soup(["script", "style"]):
+                          script.extract()
+                      text = soup.get_text()
+                      lines = (line.strip() for line in text.splitlines())
+                      chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                      email_content = [chunk for chunk in chunks if chunk]
+                  return email_content[2], "---->".join(email_content)
+          
+              def return_expenditure_details(self):
+                  """
+                  Method to return list of expenditure detail variables
+                  """
+                  email_content, whole_email_content = self.return_email_content()
+                  for type in expenditure.regex_dict:
+                      if re.search(type["recipient"], email_content) and re.search(
+                          type["amount_paid"], email_content
+                      ):
+                          return (
+                              type["payment_type"],
+                              re.search(type["amount_paid"], email_content).group(),
+                              re.search(type["recipient"], email_content).group(),
+                              email_content,
+                              whole_email_content,
+                          )
+                  return None, None, None, email_content, whole_email_content
+          
+              def return_list(self):
+                  """
+                  Method to return expenditure list
+                  """
+                  return [
+                      self.unique_id,
+                      self.payment_type,
+                      self.amount_paid,
+                      self.recipient,
+                      self.date,
+                      self.email_content,
+                      self.whole_email_content,
+                  ]
+          
+          
+          def main(stream_logger):
+              stream_logger.info("Retreive user_id, password from secrets manager")
+              secret_list = get_secret()
+              # Load the user name and passwd from yaml file
+              user = secret_list["user"]
+              password = secret_list["password"]
+          
+              # URL for IMAP connection
+              imap_url = "imap.gmail.com"
+          
+              # Connection with GMAIL using SSL
+              my_mail = imaplib.IMAP4_SSL(imap_url)
+          
+              # Log in using your credentials
+              my_mail.login(user, password)
+          
+              # Select the Inbox to fetch messages
+              my_mail.select("Inbox")
+          
+              # Define Key and Value for email search
+              # For other keys (criteria): https://gist.github.com/martinrusev/6121028#file-imap-search
+              start_date = datetime.now()
+              end_date = datetime.now() + timedelta(days=1)
+              start_date_str = start_date.strftime("%d-%b-%Y")
+              end_date_str = end_date.strftime("%d-%b-%Y")
+              stream_logger.info("Retrieving all the emails primary id.")
+              _, data = my_mail.search(
+                  None,
+                  f'(FROM "alerts@hdfcbank.net" SINCE "{start_date_str}" BEFORE "{end_date_str}")',
+              )
+          
+              mail_id_list = data[0].split()  # IDs of all emails that we want to fetch
+              msgs = []  # empty list to capture all messages
+              # Iterate through messages and extract data into the msgs list
+              for num in mail_id_list:
+                  # RFC822 returns whole message (BODY fetches just body)
+                  _, data = my_mail.fetch(num, "(RFC822)")
+                  msgs.append({"unique_id": num.decode("ascii"), "data": data})
+              stream_logger.info("Email primary ID collected")
+          
+              expenditure_list = []
+              stream_logger.info("Collecting Email contents")
+              for msg in msgs:
+                  transaction = expenditure(msg["data"], msg["unique_id"])
+                  expenditure_list.append(transaction.return_list())
+              stream_logger.info("Transaction dict collected successfully")
+              expenditure_dataframe = pd.DataFrame(
+                  expenditure_list,
+                  columns=[
+                      "unique_id",
+                      "payment_type",
+                      "amount_paid",
+                      "recipient",
+                      "date",
+                      "email_content",
+                      "whole_email_content",
+                  ],
+              )
+              stream_logger.info("Initiate pushing the raw dataframe into s3 bucket")
+              # Raw file is used for analysing any anomalies in the dataset
+			  csv_buffer = StringIO()
+              expenditure_dataframe.to_csv(csv_buffer, index=False)
+              expenditure_file_name = (
+                  "raw/" + f"expenditure_{start_date_str}_to_{end_date_str}.csv"
+              )
+              client_s3.put_object(
+                  Body=csv_buffer.getvalue(),
+                  Bucket="analyseexpenditurebucket",
+                  Key=expenditure_file_name,
+              )
+              stream_logger.info("Initiate pushing the clean dataframe into s3 bucket")
+              # Clean file is used for analysing the expenses
+              stream_logger.info("Initiate pushing the clean dataframe into s3 bucket")
+			  expenditure_dataframe = expenditure_dataframe[(~expenditure_dataframe['recipient'].isna())] 
+              expenditure_dataframe = expenditure_dataframe.reset_index(drop=True)
+              csv_buffer.truncate(0)
+              expenditure_dataframe.to_csv("expenditure_list_clean.csv")
+              expenditure_dataframe.to_csv(csv_buffer, index=False)
+              expenditure_file_name = (
+                  "clean/" + f"expenditure_{start_date_str}_to_{end_date_str}.csv"
+              )
+              client_s3.put_object(
+                  Body=csv_buffer.getvalue(),
+                  Bucket="analyseexpenditurebucket",
+                  Key=expenditure_file_name,
+              )
+          def lambda_handler(event, context):
+              stream_logger = logger().get_logger_object()
+              # initiate boto3 session
+              stream_logger.info("Initiate Boto3 session with s3")
+              stream_logger.info("Session initiated successfully")
+              try:
+                  main(stream_logger)
+              except Exception as e:
+                  stream_logger.exception(f"Exception is {e}")
+              stream_logger.info("Code executed successfully")
+          
+          
+      Timeout: 30
+      MemorySize: 128
+      Layers:
+        - arn:aws:lambda:ap-south-1:336392948345:layer:AWSSDKPandas-Python38:8
+        - arn:aws:lambda:ap-south-1:652146530864:layer:bs4:1
+      Role: !GetAtt MyLambdaRole.Arn
+
+  MyLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: analyse_expenditure_role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::652146530864:policy/service-role/AWSLambdaBasicExecutionRole-e16e13c2-cdca-43e2-8b9a-89b5466bea14
+        - arn:aws:iam::652146530864:policy/put_object_policy
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+
+  MyEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Schedule for triggering analyse_expenditure
+      ScheduleExpression: 'cron(30 16 * * ? *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt MyLambdaFunction.Arn
+          Id: MyLambdaFunctionTarget
+
+  MyEventPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref MyLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MyEventRule.Arn
