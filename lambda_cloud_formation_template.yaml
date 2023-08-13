@@ -211,8 +211,8 @@ Resources:
              )
              logger.info("Push the raw dataframe into s3 bucket")
              # Raw file is used for analysing any anomalies in the dataset
-             csv_buffer = StringIO()
-             expenditure_dataframe.to_csv(csv_buffer, index=False)
+             buffer = StringIO()
+             expenditure_dataframe.to_csv(buffer, index=False)
              expenditure_file_name = (
                  f"raw/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
              )
@@ -226,10 +226,10 @@ Resources:
              expenditure_dataframe = expenditure_dataframe[(~expenditure_dataframe['recipient'].isna())] 
              expenditure_dataframe = expenditure_dataframe.reset_index(drop=True)
              expenditure_dataframe.drop(columns=['email_content','whole_email_content'])
-             csv_buffer.truncate(0)
-             expenditure_dataframe.to_csv(csv_buffer, index=False)
+             buffer.truncate(0)
+             expenditure_dataframe.to_parquet(buffer, index=False)
              expenditure_file_name = (
-                 f"clean/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
+                 f"clean/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.parquet"
              )
              client_s3.put_object(
                  Body=csv_buffer.getvalue(),
