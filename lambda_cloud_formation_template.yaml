@@ -1,4 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Deploying all the required resource for analyse expenditure project'
 Parameters:
   StorageBucket:
     Description: 'Bucket where daily expenditure details are uploaded'
@@ -27,7 +28,7 @@ Resources:
       Code:
         ZipFile: |
          # Importing libraries
-         from io import StringIO
+         from io import StringIO, BytesIO
          import logging
          import imaplib
          from datetime import datetime, timedelta
@@ -35,6 +36,7 @@ Resources:
          import pandas as pd
          import re
          import boto3
+         import pytz
          import json
          import os
          from bs4 import BeautifulSoup
@@ -171,11 +173,13 @@ Resources:
              my_mail = imaplib.IMAP4_SSL(imap_url)
              my_mail.login(user, password)
              my_mail.select("Inbox")
+             indian_time_zone = pytz.timezone('Asia/Kolkata')
              start_date = datetime.now() -  timedelta(days=1)
+             start_date = start_date.astimezone(indian_time_zone)
              start_date_year = start_date.year
              start_date_month = start_date.month
              start_date_day = start_date.day
-             end_date = datetime.now() 
+             end_date = datetime.now().astimezone(indian_time_zone)
              start_date_str = start_date.strftime("%d-%b-%Y")
              end_date_str = end_date.strftime("%d-%b-%Y")
              logger.info("Retrieving all the emails primary id.")
@@ -211,8 +215,8 @@ Resources:
              )
              logger.info("Push the raw dataframe into s3 bucket")
              # Raw file is used for analysing any anomalies in the dataset
-             buffer = StringIO()
-             expenditure_dataframe.to_csv(buffer, index=False)
+             csv_buffer = StringIO()
+             expenditure_dataframe.to_csv(csv_buffer, index=False)
              expenditure_file_name = (
                  f"raw/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
              )
@@ -226,16 +230,18 @@ Resources:
              expenditure_dataframe = expenditure_dataframe[(~expenditure_dataframe['recipient'].isna())] 
              expenditure_dataframe = expenditure_dataframe.reset_index(drop=True)
              expenditure_dataframe.drop(columns=['email_content','whole_email_content'])
-             buffer.truncate(0)
-             expenditure_dataframe.to_parquet(buffer, index=False)
+             csv_buffer.close()
+             parquet_buffer = BytesIO()
+             expenditure_dataframe.to_parquet(parquet_buffer, index=False)
              expenditure_file_name = (
                  f"clean/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.parquet"
              )
              client_s3.put_object(
-                 Body=csv_buffer.getvalue(),
+                 Body=parquet_buffer.getvalue(),
                  Bucket=bucket_name,
                  Key=expenditure_file_name,
              )
+             parquet_buffer.close()
          def lambda_handler(event, context):
              # initiate boto3 session
              logger.info("Initiate Boto3 session with s3")
@@ -249,8 +255,7 @@ Resources:
                     TopicArn=os.environ['SNSTOPICARN'],
                     Message=f'Lambda function encountered an error: {str(e)}'
                          )
-                 logger.error(f'Function has failed with exception {e}')
-                  
+                 logger.error(f'Function has failed with exception {e}')                  
           
       Timeout: 30
       MemorySize: 128
@@ -306,7 +311,7 @@ Resources:
     Type: 'AWS::Events::Rule'
     Properties:
       Description: Schedule for triggering analyse_expenditure
-      ScheduleExpression: 'cron(30 18 * * ? *)'
+      ScheduleExpression: 'cron(30 19 * * ? *)'
       State: ENABLED
       Targets:
         - Arn: !GetAtt ANALYSEEXPENDITUREFUNCTION.Arn
