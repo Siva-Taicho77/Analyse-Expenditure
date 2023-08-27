@@ -290,6 +290,11 @@ Resources:
                 Resource:
                   - !Sub arn:aws:s3:::${StorageBucket}
                   - !Sub arn:aws:s3:::${StorageBucket}/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
   ANALYSEEXPENDITUREDATABASE:
     Type: AWS::Glue::Database
     Properties:
@@ -308,7 +313,9 @@ Resources:
         S3Targets:
           - Path: !Sub s3://${StorageBucket}/clean
       TablePrefix: "Analyse_Expenditure"
-      RecrawlPolicy: "CRAWL_NEW_FOLDERS_ONLY"
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_NEW_FOLDERS_ONLY
+
   ANALYSEEXPENDITUREFUNCTIONROLE:
     Type: AWS::IAM::Role
     Properties:
