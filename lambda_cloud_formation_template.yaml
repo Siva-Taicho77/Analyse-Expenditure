@@ -14,10 +14,9 @@ Parameters:
     Default: analyseexpendituresecrets01
     Type: String
   TopicARN:
-    Description: 'Secrets name where the credentials are stored'
     Default: arn:aws:sns:ap-south-1:652146530864:ANALYSE-EXPENDITURE-TOPIC
     Type: String
-    
+
 Resources:
   ANALYSEEXPENDITUREFUNCTION:
     Type: 'AWS::Lambda::Function'
@@ -269,7 +268,47 @@ Resources:
           STORAGEBUCKET: !Ref StorageBucket
           SECRETSNAME: !Ref secretsname
           SNSTOPICARN: !Ref TopicARN
-
+  ANALYSEEXPENDITURECRAWLERROLE:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ANALYSEEXPENDITURECRAWLERROLEPOLICY
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${storagebucket}
+                  - !Sub arn:aws:s3:::${storagebucket}/*
+  ANALYSEEXPENDITUREDATABASE:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: "AnalyseExpenditure"
+        LocationUri: !Sub "s3://${storagebucket}/"
+  
+  ANALYSEEXPENDITURECRAWLER:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: "analyseexpenditurecrawler"
+      Role: !GetAtt ANALYSEEXPENDITURECRAWLERROLE.Arn
+      DatabaseName: !Ref MyDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://${storagebucket}/clean
+      TablePrefix: "Analyse_Expenditure"
+      RecrawlPolicy: "CRAWL_NEW_FOLDERS_ONLY"
   ANALYSEEXPENDITUREFUNCTIONROLE:
     Type: AWS::IAM::Role
     Properties:
