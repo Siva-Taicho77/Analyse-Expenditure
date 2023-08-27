@@ -308,7 +308,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - 'glue:StartCrawler'
-                Resource: 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:crawler/analyseexpenditurecrawler'
+                Resource: '*'
               - Effect: "Allow"
                 Action: "sns:Publish"
                 Resource: !Ref TopicARN
@@ -329,6 +329,7 @@ Resources:
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt ANALYSEEXPENDITUREFUNCTIONTRIGGERRULE.Arn
+
   ANALYSEEXPENDITURECRAWLERROLE:
     Type: AWS::IAM::Role
     Properties:
