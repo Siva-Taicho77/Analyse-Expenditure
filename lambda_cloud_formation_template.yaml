@@ -271,64 +271,6 @@ Resources:
           STORAGEBUCKET: !Ref StorageBucket
           SECRETSNAME: !Ref secretsname
           SNSTOPICARN: !Ref TopicARN
-  ANALYSEEXPENDITURECRAWLERROLE:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: glue.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ANALYSEEXPENDITURECRAWLERROLEPOLICY
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub arn:aws:s3:::${StorageBucket}
-                  - !Sub arn:aws:s3:::${StorageBucket}/*
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - glue:GetDatabase
-                  - glue:GetTable  
-                  - glue:CreateTable 
-                  - glue:BatchGetPartition 
-                  - glue:BatchCreatePartition
-                Resource: "*"
-  ANALYSEEXPENDITUREDATABASE:
-    Type: AWS::Glue::Database
-    Properties:
-      CatalogId: !Ref AWS::AccountId
-      DatabaseInput:
-        Name: "analyseexpenditure"
-        LocationUri: !Sub "s3://${StorageBucket}/"
-  
-  ANALYSEEXPENDITURECRAWLER:
-    Type: AWS::Glue::Crawler
-    Properties:
-      Name: "analyseexpenditurecrawler"
-      Role: !GetAtt ANALYSEEXPENDITURECRAWLERROLE.Arn
-      DatabaseName: !Ref ANALYSEEXPENDITUREDATABASE
-      Targets:
-        S3Targets:
-          - Path: !Sub s3://${StorageBucket}/clean/
-      TablePrefix: "Analyse_Expenditure"
-      RecrawlPolicy:
-        RecrawlBehavior: CRAWL_NEW_FOLDERS_ONLY
-
   ANALYSEEXPENDITUREFUNCTIONROLE:
     Type: AWS::IAM::Role
     Properties:
@@ -387,3 +329,61 @@ Resources:
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt ANALYSEEXPENDITUREFUNCTIONTRIGGERRULE.Arn
+  ANALYSEEXPENDITURECRAWLERROLE:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ANALYSEEXPENDITURECRAWLERROLEPOLICY
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${StorageBucket}
+                  - !Sub arn:aws:s3:::${StorageBucket}/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable  
+                  - glue:CreateTable 
+                  - glue:BatchGetPartition 
+                  - glue:BatchCreatePartition
+                Resource: "*"
+  ANALYSEEXPENDITUREDATABASE:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: "analyseexpenditure"
+        LocationUri: !Sub "s3://${StorageBucket}/"
+  
+  ANALYSEEXPENDITURECRAWLER:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: "analyseexpenditurecrawler"
+      Role: !GetAtt ANALYSEEXPENDITURECRAWLERROLE.Arn
+      DatabaseName: !Ref ANALYSEEXPENDITUREDATABASE
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://${StorageBucket}/clean/
+      TablePrefix: "Analyse_Expenditure"
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_NEW_FOLDERS_ONLY
+
