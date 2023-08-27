@@ -248,7 +248,7 @@ Resources:
              try:
                  main()
                  # Trigger the crawler to update the catalog
-                 glue_client.start_crawler(Name=crawler_name)
+                 client_glue.start_crawler(Name=crawler_name)
              except Exception as e:
                  logger.info("sending alert to subscribers")
                  sns = boto3.client("sns")
