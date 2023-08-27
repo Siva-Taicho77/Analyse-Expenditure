@@ -312,7 +312,7 @@ Resources:
       DatabaseName: !Ref ANALYSEEXPENDITUREDATABASE
       Targets:
         S3Targets:
-          - Path: !Sub s3://${StorageBucket}/clean
+          - Path: !Sub s3://${StorageBucket}/clean/
       TablePrefix: "Analyse_Expenditure"
       RecrawlPolicy:
         RecrawlBehavior: CRAWL_NEW_FOLDERS_ONLY
