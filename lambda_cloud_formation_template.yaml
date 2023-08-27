@@ -303,10 +303,10 @@ Resources:
     Properties:
       Name: "analyseexpenditurecrawler"
       Role: !GetAtt ANALYSEEXPENDITURECRAWLERROLE.Arn
-      DatabaseName: !Ref MyDatabase
+      DatabaseName: !Ref ANALYSEEXPENDITUREDATABASE
       Targets:
         S3Targets:
-          - Path: !Sub s3://${storagebucket}/clean
+          - Path: !Sub s3://${StorageBucket}/clean
       TablePrefix: "Analyse_Expenditure"
       RecrawlPolicy: "CRAWL_NEW_FOLDERS_ONLY"
   ANALYSEEXPENDITUREFUNCTIONROLE:
