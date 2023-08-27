@@ -297,6 +297,10 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                Resource: "*"
   ANALYSEEXPENDITUREDATABASE:
     Type: AWS::Glue::Database
     Properties:
