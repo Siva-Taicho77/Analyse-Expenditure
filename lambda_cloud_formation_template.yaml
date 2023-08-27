@@ -49,6 +49,7 @@ Resources:
          region_name = os.environ["REGION"]
          bucket_name = os.environ["STORAGEBUCKET"]
          secret_name = os.environ["SECRETSNAME"]
+         crawler_name = os.environ["CRAWLERNAME"]  # Read the environment variable
          boto_session = boto3.Session()
          client_s3 = boto_session.client("s3")
          client_secrets_manager = boto_session.client(
@@ -271,6 +272,7 @@ Resources:
           STORAGEBUCKET: !Ref StorageBucket
           SECRETSNAME: !Ref secretsname
           SNSTOPICARN: !Ref TopicARN
+          CRAWLERNAME: !Ref ANALYSEEXPENDITURECRAWLER 
   ANALYSEEXPENDITUREFUNCTIONROLE:
     Type: AWS::IAM::Role
     Properties:
