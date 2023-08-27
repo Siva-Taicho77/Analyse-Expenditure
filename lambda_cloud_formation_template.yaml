@@ -295,6 +295,7 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
+                Resource: '*'
   ANALYSEEXPENDITUREDATABASE:
     Type: AWS::Glue::Database
     Properties:
