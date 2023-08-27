@@ -54,6 +54,7 @@ Resources:
          client_secrets_manager = boto_session.client(
              service_name="secretsmanager", region_name=region_name
          )
+         client_glue = boto_session.client('glue')
          
          
          # Function to retreive email credentials from secret manager
@@ -246,6 +247,8 @@ Resources:
              logger.info("Session initiated successfully")
              try:
                  main()
+                 # Trigger the crawler to update the catalog
+                 glue_client.start_crawler(Name=crawler_name)
              except Exception as e:
                  logger.info("sending alert to subscribers")
                  sns = boto3.client("sns")
@@ -300,6 +303,10 @@ Resources:
               - Effect: Allow
                 Action:
                   - glue:GetDatabase
+                  - glue:GetTable  
+                  - glue:CreateTable 
+                  - glue:BatchGetPartition 
+                  - glue:BatchCreatePartition
                 Resource: "*"
   ANALYSEEXPENDITUREDATABASE:
     Type: AWS::Glue::Database
@@ -356,6 +363,10 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'glue:StartCrawler'
+                Resource: 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:crawler/analyseexpenditurecrawler'
               - Effect: "Allow"
                 Action: "sns:Publish"
                 Resource: !Ref TopicARN
