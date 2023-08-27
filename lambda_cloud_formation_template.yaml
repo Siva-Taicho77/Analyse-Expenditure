@@ -295,7 +295,7 @@ Resources:
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
-        Name: "AnalyseExpenditure"
+        Name: "analyseexpenditure"
         LocationUri: !Sub "s3://${StorageBucket}/"
   
   ANALYSEEXPENDITURECRAWLER:
