@@ -288,15 +288,15 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                 Resource:
-                  - !Sub arn:aws:s3:::${storagebucket}
-                  - !Sub arn:aws:s3:::${storagebucket}/*
+                  - !Sub arn:aws:s3:::${StorageBucket}
+                  - !Sub arn:aws:s3:::${StorageBucket}/*
   ANALYSEEXPENDITUREDATABASE:
     Type: AWS::Glue::Database
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
         Name: "AnalyseExpenditure"
-        LocationUri: !Sub "s3://${storagebucket}/"
+        LocationUri: !Sub "s3://${StorageBucket}/"
   
   ANALYSEEXPENDITURECRAWLER:
     Type: AWS::Glue::Crawler
