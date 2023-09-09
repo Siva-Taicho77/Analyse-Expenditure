@@ -1,4 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Deploying all the required resource for analyse expenditure project'
 Parameters:
   StorageBucket:
     Description: 'Bucket where daily expenditure details are uploaded'
@@ -13,10 +14,9 @@ Parameters:
     Default: analyseexpendituresecrets01
     Type: String
   TopicARN:
-    Description: 'Secrets name where the credentials are stored'
     Default: arn:aws:sns:ap-south-1:652146530864:ANALYSE-EXPENDITURE-TOPIC
     Type: String
-    
+
 Resources:
   ANALYSEEXPENDITUREFUNCTION:
     Type: 'AWS::Lambda::Function'
@@ -26,38 +26,40 @@ Resources:
       Handler: index.lambda_handler
       Code:
         ZipFile: |
-         # Importing libraries
-         from io import StringIO
-         import logging
-         import imaplib
-         from datetime import datetime, timedelta
-         import email
-         import pandas as pd
-         import re
-         import boto3
          import json
          import os
+         import re
          from bs4 import BeautifulSoup
+         from datetime import datetime, timedelta
+         from io import BytesIO, StringIO
+         import imaplib
+         import logging
+         import email
+         import pandas as pd
+         import boto3
+         import pytz
          from botocore.exceptions import ClientError
          
          
          logger = logging.getLogger()
-         logger.setLevel(logging.INFO)        
+         logger.setLevel(logging.INFO)
          # Initialze global variables and client session.
          logger.info("Initializing Variable and client session")
          secret_name = "analyseexpendituresecrets01"
-         region_name = os.environ['REGION']
-         bucket_name = os.environ['STORAGEBUCKET']
-         secret_name = os.environ['SECRETSNAME']
+         region_name = os.environ["REGION"]
+         bucket_name = os.environ["STORAGEBUCKET"]
+         secret_name = os.environ["SECRETSNAME"]
+         crawler_name = os.environ["CRAWLERNAME"]  # Read the environment variable
          boto_session = boto3.Session()
          client_s3 = boto_session.client("s3")
          client_secrets_manager = boto_session.client(
              service_name="secretsmanager", region_name=region_name
          )
+         client_glue = boto_session.client('glue')
+         
          
          # Function to retreive email credentials from secret manager
          def get_secret():
-         
              try:
                  get_secret_value_response = client_secrets_manager.get_secret_value(
                      SecretId=secret_name
@@ -171,11 +173,13 @@ Resources:
              my_mail = imaplib.IMAP4_SSL(imap_url)
              my_mail.login(user, password)
              my_mail.select("Inbox")
-             start_date = datetime.now() -  timedelta(days=1)
+             indian_time_zone = pytz.timezone("Asia/Kolkata")
+             start_date = datetime.now() - timedelta(days=1)
+             start_date = start_date.astimezone(indian_time_zone)
              start_date_year = start_date.year
              start_date_month = start_date.month
              start_date_day = start_date.day
-             end_date = datetime.now() 
+             end_date = datetime.now().astimezone(indian_time_zone)
              start_date_str = start_date.strftime("%d-%b-%Y")
              end_date_str = end_date.strftime("%d-%b-%Y")
              logger.info("Retrieving all the emails primary id.")
@@ -184,8 +188,8 @@ Resources:
                  f'(FROM "alerts@hdfcbank.net" SINCE "{start_date_str}" BEFORE "{end_date_str}")',
              )
          
-             mail_id_list = data[0].split()  
-             msgs = [] 
+             mail_id_list = data[0].split()
+             msgs = []
              for num in mail_id_list:
                  _, data = my_mail.fetch(num, "(RFC822)")
                  msgs.append({"unique_id": num.decode("ascii"), "data": data})
@@ -213,9 +217,7 @@ Resources:
              # Raw file is used for analysing any anomalies in the dataset
              csv_buffer = StringIO()
              expenditure_dataframe.to_csv(csv_buffer, index=False)
-             expenditure_file_name = (
-                 f"raw/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
-             )
+             expenditure_file_name = f"raw/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
              client_s3.put_object(
                  Body=csv_buffer.getvalue(),
                  Bucket=bucket_name,
@@ -223,34 +225,40 @@ Resources:
              )
              # Clean file is used for analysing the expenses
              logger.info("Push the clean dataframe into s3 bucket")
-             expenditure_dataframe = expenditure_dataframe[(~expenditure_dataframe['recipient'].isna())] 
+             expenditure_dataframe = expenditure_dataframe[
+                 (~expenditure_dataframe["recipient"].isna())
+             ]
              expenditure_dataframe = expenditure_dataframe.reset_index(drop=True)
-             expenditure_dataframe.drop(columns=['email_content','whole_email_content'])
-             csv_buffer.truncate(0)
-             expenditure_dataframe.to_csv(csv_buffer, index=False)
-             expenditure_file_name = (
-                 f"clean/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.csv"
-             )
+             expenditure_dataframe.drop(columns=["email_content", "whole_email_content"])
+             csv_buffer.close()
+             parquet_buffer = BytesIO()
+             expenditure_dataframe.to_parquet(parquet_buffer, index=False)
+             expenditure_file_name = f"clean/{start_date_year}/{start_date_month}/{start_date_day}/expenditure_{start_date_str}.parquet"
              client_s3.put_object(
-                 Body=csv_buffer.getvalue(),
+                 Body=parquet_buffer.getvalue(),
                  Bucket=bucket_name,
                  Key=expenditure_file_name,
              )
+             parquet_buffer.close()
+         
+         
          def lambda_handler(event, context):
              # initiate boto3 session
              logger.info("Initiate Boto3 session with s3")
              logger.info("Session initiated successfully")
              try:
                  main()
+                 # Trigger the crawler to update the catalog
+                 client_glue.start_crawler(Name=crawler_name)
              except Exception as e:
-                 logger.info('sending alert to subscribers')
-                 sns = boto3.client('sns')
+                 logger.info("sending alert to subscribers")
+                 sns = boto3.client("sns")
                  sns.publish(
-                    TopicArn=os.environ['SNSTOPICARN'],
-                    Message=f'Lambda function encountered an error: {str(e)}'
-                         )
-                 logger.error(f'Function has failed with exception {e}')
-                  
+                     TopicArn=os.environ["SNSTOPICARN"],
+                     Message=f"Lambda function encountered an error: {str(e)}",
+                 )
+                 logger.error(f"Function has failed with exception {e}")
+                       
           
       Timeout: 30
       MemorySize: 128
@@ -264,7 +272,7 @@ Resources:
           STORAGEBUCKET: !Ref StorageBucket
           SECRETSNAME: !Ref secretsname
           SNSTOPICARN: !Ref TopicARN
-
+          CRAWLERNAME: !Ref ANALYSEEXPENDITURECRAWLER 
   ANALYSEEXPENDITUREFUNCTIONROLE:
     Type: AWS::IAM::Role
     Properties:
@@ -299,6 +307,10 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'glue:StartCrawler'
+                Resource: '*'
               - Effect: "Allow"
                 Action: "sns:Publish"
                 Resource: !Ref TopicARN
@@ -306,7 +318,7 @@ Resources:
     Type: 'AWS::Events::Rule'
     Properties:
       Description: Schedule for triggering analyse_expenditure
-      ScheduleExpression: 'cron(30 18 * * ? *)'
+      ScheduleExpression: 'cron(30 19 * * ? *)'
       State: ENABLED
       Targets:
         - Arn: !GetAtt ANALYSEEXPENDITUREFUNCTION.Arn
@@ -319,3 +331,62 @@ Resources:
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt ANALYSEEXPENDITUREFUNCTIONTRIGGERRULE.Arn
+
+  ANALYSEEXPENDITURECRAWLERROLE:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ANALYSEEXPENDITURECRAWLERROLEPOLICY
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${StorageBucket}
+                  - !Sub arn:aws:s3:::${StorageBucket}/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable  
+                  - glue:CreateTable 
+                  - glue:BatchGetPartition 
+                  - glue:BatchCreatePartition
+                Resource: "*"
+  ANALYSEEXPENDITUREDATABASE:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: "analyseexpenditure"
+        LocationUri: !Sub "s3://${StorageBucket}/"
+  
+  ANALYSEEXPENDITURECRAWLER:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: "analyseexpenditurecrawler"
+      Role: !GetAtt ANALYSEEXPENDITURECRAWLERROLE.Arn
+      DatabaseName: !Ref ANALYSEEXPENDITUREDATABASE
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://${StorageBucket}/clean/
+      TablePrefix: "Analyse_Expenditure"
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_NEW_FOLDERS_ONLY
+
