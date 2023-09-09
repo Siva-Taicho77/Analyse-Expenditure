@@ -15,4 +15,4 @@ __<u>Architecture Diagram</u>__
 
 __<u>Alert Email Image</u>__
 
-![Sample Alert Email](images/sample_email_image.PNG)
+![Sample Alert Email](images/expenditure_email.PNG)
