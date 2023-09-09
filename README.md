@@ -13,10 +13,10 @@ Following events will generate an alert to my email:
 - Payment made via UPI or Netbanking
 
 __<u>Architecture Diagram</u>__
-![Architecture Diagram](images/architecture_diagram.png)
+![Architecture Diagram](images/architecture_diagram.PNG)
 
 __<u>Alert Email Image</u>__
 
-![Sample Alert Email](images/expenditure_email.PNG)
+![Sample Alert Email](images/expenditure_email.png)
 
 
