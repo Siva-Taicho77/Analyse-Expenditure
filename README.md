@@ -4,7 +4,7 @@ Resources are deployed as cloudformation stack.
 __<u>Project Overview</u>__
 
 1. The lambda function retreives Google API credentials and uses it to retreive the html email content from Gmail server via IMAP protocol
-2. Lambda function cleans the html function and uploads it into s3 bucket as a csv on daily basis.
+2. Lambda function extracts dataset from the html content and uploads it into s3 bucket as a csv on daily basis.
 3. The crawler updates the glue catalog on daily basis.
 4. Analysis can be by connecting any visualization tool like Tableau, PowerBI with Athena 
 
